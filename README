@@ -1,3 +1,28 @@
+Fork of Atronix's version of Rebol 3 with basic UTF-8 support that
+was lacking in the original.
+
+*Keys added / modified:*
+
+* Ctrl-D - added UTF-8 support
+* Ctrl-F / Ctrl-B - added UTF-8 support
+* Ctrl-N / Ctrl-P - history down / up
+* Ctrl-K - kill to the end of line
+* Ctrl-U - kill full line
+* Ctrl-W - kill word backward
+* Ctrl-T - transpose characters
+* Alt-F / Alt-B - move forward / backward by word
+* Alt-D  - kill word forward
+
+Note on Unicode
+===============
+I am no expert in either Unicode, or C, so there may be bugs in this
+UTF-8 implementation. I tested it manually as fully as I could and
+found no errors so far. It works for me. Any additions, corrections
+and notes are welcome :)
+
+
+Original README
+===============
 Rebol [R3] Source Code Distribution
 Date: 12-Dec-2012
 Version: 2.101.0
