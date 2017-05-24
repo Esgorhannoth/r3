@@ -379,6 +379,7 @@ mark_obj:
 		case REB_CLOSURE:
 		case REB_REBCODE:
 			CHECK_MARK(VAL_FUNC_BODY(val), depth);
+			/* no break */
 		case REB_NATIVE:
 		case REB_ACTION:
 		case REB_OP:
@@ -821,21 +822,6 @@ mark_obj:
 
 	// Reset stack to prevent invalid MOLD access:
 	RESET_TAIL(DS_Series);
-
-	if (GC_Ballast <= VAL_INT32(TASK_BALLAST) / 2
-		&& VAL_INT64(TASK_BALLAST) < MAX_I32) {
-		//increasing ballast by half
-		VAL_INT64(TASK_BALLAST) /= 2;
-		VAL_INT64(TASK_BALLAST) *= 3;
-	} else if (GC_Ballast >= VAL_INT64(TASK_BALLAST) * 2) {
-		//reduce ballast by half
-		VAL_INT64(TASK_BALLAST) /= 2;
-	}
-
-	/* avoid overflow */
-	if (VAL_INT64(TASK_BALLAST) < 0 || VAL_INT64(TASK_BALLAST) >= MAX_I32) {
-		VAL_INT64(TASK_BALLAST) = MAX_I32;
-	}
 
 	GC_Ballast = VAL_INT32(TASK_BALLAST);
 	GC_Disabled = 0;

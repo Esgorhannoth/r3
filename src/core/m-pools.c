@@ -249,12 +249,7 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	pool->has += units;
 
 	// Add new nodes to the end of free list:
-	if (pool->last == NULL) {
-		node = (REBNOD*)&pool->first;
-	} else {
-		node = pool->last;
-		ASAN_UNPOISON_MEMORY_REGION(node, pool->wide);
-	}
+	for (node = (REBNOD *)&pool->first; *node; node = *node);	// goto end
 
 #ifdef MUNGWALL
 	for (next = (REBYTE *)(seg + 1); units > 0; units--) {
@@ -271,10 +266,6 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	}
 #endif
 	*node = 0;
-	if (pool->last != NULL) {
-		ASAN_POISON_MEMORY_REGION(pool->last, pool->wide);
-	}
-	pool->last = node;
 	ASAN_POISON_MEMORY_REGION(seg, mem_size);
 }
 
@@ -298,9 +289,6 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	ASAN_UNPOISON_MEMORY_REGION(node, pool->wide);
 
 	pool->first = *node;
-	if (node == pool->last) {
-		pool->last = NULL;
-	}
 	pool->free--;
 	return (void *)node;
 }
@@ -314,21 +302,13 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 **
 ***********************************************************************/
 {
-	REBPOL *pool = &Mem_Pools[pool_id];
+	MUNG_CHECK(pool_id, node, Mem_Pools[pool_id].wide);
+	*node = Mem_Pools[pool_id].first;
 
-	MUNG_CHECK(pool_id, node, pool->wide);
-	if (pool->last == NULL) { //pool is empty
-		Fill_Pool(pool); //insert an empty segment, such that this node won't be picked by next Make_Node to enlongate the poisonous time of this area to catch stale pointers
-	}
-	ASAN_UNPOISON_MEMORY_REGION(pool->last, pool->wide);
-	*(pool->last) = node;
-	ASAN_POISON_MEMORY_REGION(pool->last, pool->wide);
-	pool->last = node;
-	*node = NULL;
+	ASAN_POISON_MEMORY_REGION(node, Mem_Pools[pool_id].wide);
 
-	ASAN_POISON_MEMORY_REGION(node, pool->wide);
-
-	pool->free++;
+	Mem_Pools[pool_id].first = node;
+	Mem_Pools[pool_id].free++;
 }
 
 
@@ -353,8 +333,13 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	length *= SERIES_WIDE(series);
 	pool_num = FIND_POOL(length);
 	if (pool_num < SYSTEM_POOL) {
-		node = Make_Node(pool_num);
-		length = Mem_Pools[pool_num].wide;
+		pool = &Mem_Pools[pool_num];
+		if (!pool->first) Fill_Pool(pool);
+		node = pool->first;
+		ASAN_UNPOISON_MEMORY_REGION(node, pool->wide);
+		pool->first = *node;
+		pool->free--;
+		length = pool->wide;
 	} else {
 		length = ALIGN(length, 2048);
 #ifdef DEBUGGING
@@ -415,8 +400,13 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 
 	pool_num = FIND_POOL(length);
 	if (pool_num < SYSTEM_POOL) {
-		node = Make_Node(pool_num);
-		length = Mem_Pools[pool_num].wide;
+		pool = &Mem_Pools[pool_num];
+		if (!pool->first) Fill_Pool(pool);
+		node = pool->first;
+		ASAN_UNPOISON_MEMORY_REGION(node, pool->wide);
+		pool->first = *node;
+		pool->free--;
+		length = pool->wide;
 		memset(node, 0, length);
 	} else {
 		if (powerof2) {
@@ -460,7 +450,7 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	series->info = wide; // also clears flags
 	LABEL_SERIES(series, "make");
 
-	if ((GC_Ballast -= length) <= 0) SET_SIGNAL(SIG_RECYCLE);
+	if ((GC_Ballast -= length + sizeof(REBSER)) <= 0) SET_SIGNAL(SIG_RECYCLE);
 
 	// Keep the last few series in the nursery, safe from GC:
 	if (GC_Last_Infant >= MAX_SAFE_SERIES) GC_Last_Infant = 0;
@@ -485,6 +475,8 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	gcm->mem = p;
 	gcm->free = free;
 	USE_GCM(gcm);
+
+	if ((GC_Ballast -= Mem_Pools[GCM_POOL].wide) <= 0) SET_SIGNAL(SIG_RECYCLE);
 
 	return gcm;
 }
@@ -533,7 +525,10 @@ const REBPOOLSPEC Mem_Pool_Spec[MAX_POOLS] =
 	MUNG_CHECK(pool_num,node, size);
 
 	if (pool_num < SYSTEM_POOL) {
-		Free_Node(pool_num, (REBNOD *)node);
+		pool = &Mem_Pools[pool_num];
+		*node = pool->first;
+		pool->first = node;
+		pool->free++;
 	} else {
 #ifdef MUNGWALL
 		Free_Mem(((REBYTE *)node)-MUNG_SIZE, size + MUNG_SIZE*2);
@@ -581,6 +576,11 @@ clear_header:
 	//series->size = 0xBAD3BAD3;
 
 	Free_Node(SERIES_POOL, (REBNOD *)series);
+
+	if (REB_I32_ADD_OF(GC_Ballast, sizeof(REBSER), &GC_Ballast)) {
+		GC_Ballast = MAX_I32;
+	}
+    if (GC_Ballast > 0) CLR_SIGNAL(SIG_RECYCLE);
 
 	/* remove from GC_Infants */
 	for (n = 0; n < MAX_SAFE_SERIES; n++) {
@@ -630,6 +630,12 @@ clear_header:
 	gcm->free(gcm->mem);
 	UNUSE_GCM(gcm);
 	Free_Node(GCM_POOL, (REBNOD *)gcm);
+
+	if (REB_I32_ADD_OF(GC_Ballast, Mem_Pools[GCM_POOL].wide, &GC_Ballast)) {
+		GC_Ballast = MAX_I32;
+	}
+
+	if (GC_Ballast > 0) CLR_SIGNAL(SIG_RECYCLE);
 }
 
 /***********************************************************************
